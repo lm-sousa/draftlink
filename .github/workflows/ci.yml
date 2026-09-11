@@ -60,11 +60,13 @@ jobs:
       id-token: write # OIDC token npm exchanges for a short-lived publish token
     steps:
       - uses: actions/checkout@v7
+      # npm >= 11.5.1 is required for trusted publishing; Node 22 bundles npm 10.x
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
           package-manager-cache: false # never cache in release builds
+      - run: npm install -g npm@latest
       - run: npm ci
       # the release tag must match the version being published
       - run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
