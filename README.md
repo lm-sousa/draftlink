@@ -1,6 +1,6 @@
 # draftlink
 
-<p align="center"><img src="https://raw.githubusercontent.com/lm-sousa/draftlink/master/assets/banner.png" alt="DraftLink — from idea to impact" width="720"></p>
+<div align="center"><img src="https://raw.githubusercontent.com/lm-sousa/draftlink/master/assets/banner.png" alt="DraftLink — from idea to impact" width="720"></div>
 
 Publish HTML drafts from agents; searchable, shareable, status-tracked.
 
