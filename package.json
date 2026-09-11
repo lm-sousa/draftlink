@@ -1,0 +1,45 @@
+{
+  "name": "draftlink",
+  "version": "0.1.0",
+  "description": "Publish HTML drafts from agents; searchable, shareable, status-tracked. Cloudflare Worker + CLI.",
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "draftlink": "bin/draftlink"
+  },
+  "files": [
+    "bin/draftlink",
+    "src/",
+    "migrations/",
+    "wrangler.jsonc",
+    "tsconfig.json",
+    "skills/"
+  ],
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepublishOnly": "node scripts/prepublish-check.js",
+    "db:local": "wrangler d1 migrations apply draftlink --local",
+    "db:remote": "wrangler d1 migrations apply draftlink --remote"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "@cloudflare/workers-types": "^5.20260825.1",
+    "typescript": "^7.0.0",
+    "vitest": "^4.1.11",
+    "wrangler": "^4.125.0"
+  },
+  "allowScripts": {
+    "workerd@1.20260815.1": true,
+    "workerd@1.20260820.1": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lm-sousa/draftlink.git"
+  }
+}

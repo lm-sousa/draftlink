@@ -1,0 +1,393 @@
+#!/usr/bin/env node
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+
+// curl honored HTTP(S)_PROXY implicitly; global fetch needs Node's opt-in flag,
+// which is read at startup — re-exec with it, but only when a proxy is actually
+// configured and this Node supports the flag.
+if (
+  !process.env.DRAFTLINK_NO_REEXEC &&
+  ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"].some((k) => process.env[k])
+) {
+  const probe = spawnSync(process.execPath, ["--use-env-proxy", "-e", ""]);
+  if (probe.status === 0) {
+    const r = spawnSync(
+      process.execPath,
+      ["--use-env-proxy", process.argv[1], ...process.argv.slice(2)],
+      { stdio: "inherit", env: { ...process.env, DRAFTLINK_NO_REEXEC: "1" } }
+    );
+    process.exit(r.status ?? 1);
+  }
+}
+
+const CONFIG_DIR = path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "draftlink");
+const CONFIG_FILE = path.join(CONFIG_DIR, "credentials");
+
+const PKG_VERSION = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version || "";
+  } catch {
+    return "";
+  }
+})();
+
+function newerThan(a, b) {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < 3; i++) if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0);
+  return false;
+}
+
+// Best-effort: once a day, only on a real terminal (never for CI/agent calls),
+// and a failure here must never fail the command.
+async function checkUpdate() {
+  if (!process.stdout.isTTY || !PKG_VERSION) return;
+  try {
+    const stamp = path.join(CONFIG_DIR, "update-check");
+    if (Date.now() - (fs.statSync(stamp).mtimeMs ?? 0) < 86_400_000) return;
+    const res = await fetch("https://registry.npmjs.org/draftlink/latest", { signal: AbortSignal.timeout(2000) });
+    const latest = (await res.json()).version;
+    if (newerThan(latest, PKG_VERSION)) {
+      process.stderr.write(`note: draftlink ${latest} available — run 'draftlink upgrade'\n`);
+    }
+    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    fs.closeSync(fs.openSync(stamp, "w"));
+  } catch {}
+}
+
+const die = (e) => {
+  process.stderr.write(`error: ${e?.cause?.message ?? e?.message ?? e}\n`);
+  process.exit(1);
+};
+const clean = (s) => String(s).replaceAll(/[\x00-\x1f\x7f-\x9f]/g, "");
+process.on("uncaughtException", die);
+process.on("unhandledRejection", die);
+
+function usage() {
+  process.stdout.write(`draftlink CLI
+
+  draftlink auth login [--url URL]         store credentials once (human does this)
+  draftlink auth status                    show saved URL and key prefix
+  draftlink auth logout                    forget stored credentials
+  draftlink upgrade                        update the CLI (installs via npm)
+  draftlink upload <file.html> [--title T] [--project P] [--status S]
+  draftlink upload - < plan.html           read from stdin
+  draftlink update <id> [--file F|-] [--title T] [--project P] [--status S] [--public|--private]
+  draftlink read <id|url>           print draft HTML to stdout (uses your login; public drafts need none)
+  draftlink list [query]            search your drafts
+  draftlink delete <id>                    delete a draft you own
+
+Credentials live in ${CONFIG_FILE} (mode 600).
+Agents and scripts only ever call draftlink; they never handle tokens.
+Env overrides for CI: DRAFTLINK_TOKEN, DRAFTLINK_URL.
+`);
+  process.exit(1);
+}
+
+function loadConfig() {
+  const cfg = {};
+  try {
+    for (const line of fs.readFileSync(CONFIG_FILE, "utf8").split("\n")) {
+      const i = line.indexOf("=");
+      if (i > 0) cfg[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+    }
+  } catch {}
+  return {
+    url: process.env.DRAFTLINK_URL || cfg.url || "",
+    token: process.env.DRAFTLINK_TOKEN || cfg.token || "",
+  };
+}
+
+function requireAuth() {
+  const cfg = loadConfig();
+  if (!cfg.token) {
+    process.stderr.write("error: not logged in — run 'draftlink auth login' first\n");
+    process.exit(1);
+  }
+  return cfg;
+}
+
+function saveConfig(url, token) {
+  fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(CONFIG_FILE, `url=${url}\ntoken=${token}\n`, { mode: 0o600 });
+  fs.chmodSync(CONFIG_DIR, 0o700);
+  fs.chmodSync(CONFIG_FILE, 0o600);
+}
+
+function ttyInput() {
+  const readLine = (prompt, hidden) =>
+    new Promise((resolve) => {
+      process.stdout.write(prompt);
+      process.stdin.resume();
+      if (hidden) process.stdin.setRawMode(true);
+      process.stdin.setEncoding("utf8");
+      const chars = [];
+      const onKey = (chunk) => {
+        for (const c of chunk) {
+          if (c === "\r" || c === "\n") {
+            done();
+            if (!hidden) process.stdout.write("\n");
+            resolve(chars.join(""));
+            return;
+          } else if (c === "\x03") {
+            done();
+            process.exit(130);
+          } else if (c === "\x7f" || c === "\x08") {
+            chars.pop();
+          } else {
+            chars.push(c);
+          }
+        }
+      };
+      const done = () => {
+        if (hidden) process.stdin.setRawMode(false);
+        process.stdin.pause();
+        process.stdin.removeListener("data", onKey);
+      };
+      process.stdin.on("data", onKey);
+    });
+  return {
+    line: (prompt) => readLine(prompt, false),
+    secret: (prompt) => readLine(prompt, true),
+  };
+}
+
+function pipeInput() {
+  const lines = fs.readFileSync(0, "utf8").split("\n").map((s) => s.trim());
+  let i = 0;
+  const next = async (prompt) => {
+    process.stdout.write(prompt);
+    return lines[i++] ?? "";
+  };
+  return { line: next, secret: next };
+}
+
+function qsOf(opts) {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(opts)) if (v) qs.set(k, v);
+  const s = qs.toString();
+  return s ? `?${s}` : "";
+}
+
+async function api(cfg, method, pathname, { body } = {}) {
+  if (!cfg.url) {
+    process.stderr.write("error: no draftlink URL configured — run 'draftlink auth login' first\n");
+    process.exit(1);
+  }
+  const headers = {};
+  if (cfg.token) headers.Authorization = `Bearer ${cfg.token}`;
+  if (body !== undefined) headers["Content-Type"] = "text/html; charset=utf-8";
+  const res = await fetch(cfg.url + pathname, { method, headers, body });
+  if (!res.ok && method === "DELETE") {
+    // server hides existence from non-owners; surface it plainly
+    process.stderr.write(`error: HTTP ${res.status}\n`);
+    process.exit(1);
+  }
+  return res;
+}
+
+function parseOpts(args) {
+  const o = { file: "", title: "", project: "", status: "", visibility: "" };
+  const take = (flag) => {
+    const v = args.shift();
+    if (v === undefined) {
+      process.stderr.write(`error: ${flag} requires a value\n`);
+      process.exit(1);
+    }
+    return v;
+  };
+  while (args.length) {
+    const a = args.shift();
+    switch (a) {
+      case "--title": o.title = take(a); break;
+      case "--project": case "-p": o.project = take(a); break;
+      case "--status": o.status = take(a); break;
+      case "--public": o.visibility = "true"; break;
+      case "--private": o.visibility = "false"; break;
+      case "--file": o.file = take(a); break;
+      case "-": if (o.file) usage(); o.file = "-"; break;
+      default:
+        if (a.startsWith("-")) usage();
+        else if (o.file) usage();
+        else o.file = a;
+    }
+  }
+  return o;
+}
+
+function readBody(o) {
+  if (o.file === "-") {
+    // Windows can't sync-read a console fd; interactive stdin still works on POSIX.
+    if (process.platform === "win32" && process.stdin.isTTY) {
+      process.stderr.write(`error: "-" reads from stdin — pipe it (Get-Content plan.html | draftlink upload -) or pass the file directly\n`);
+      process.exit(1);
+    }
+    return fs.readFileSync(0, "utf8");
+  }
+  if (o.file) {
+    if (!fs.existsSync(o.file)) {
+      process.stderr.write(`error: no such file ${o.file}\n`);
+      process.exit(1);
+    }
+    return fs.readFileSync(o.file, "utf8");
+  }
+  return undefined;
+}
+
+const [cmd, ...rest] = process.argv.slice(2);
+
+if (["upload", "update", "list", "delete", "read"].includes(cmd)) await checkUpdate();
+
+switch (cmd) {
+  case "auth": {
+    const sub = rest[0];
+    if (sub === "login") {
+      let urlFlag = "";
+      const args = rest.slice(1);
+      while (args.length) {
+        const a = args.shift();
+        if (a === "--url" || a === "-u") {
+          urlFlag = args.shift();
+          if (urlFlag === undefined) {
+            process.stderr.write("error: --url requires a value\n");
+            process.exit(1);
+          }
+        } else {
+          usage();
+        }
+      }
+      const current = loadConfig();
+      const input = process.stdin.isTTY ? ttyInput() : pipeInput();
+      const url = urlFlag || (await input.line(`draftlink URL (your draftlink instance${current.url ? `, enter for ${current.url}` : ""}): `)) || current.url;
+      if (!url || !/^https?:\/\//i.test(url)) {
+        process.stderr.write("error: draftlink URL required (e.g. https://draftlink.example.com)\n");
+        process.exit(1);
+      }
+      const token = await input.secret(`API token (create at ${url}/keys): `);
+      const probe = await fetch(`${url}/api/drafts`, { headers: { Authorization: `Bearer ${token}` } });
+      if (probe.status !== 200) {
+        process.stderr.write(`error: token rejected (HTTP ${probe.status})\n`);
+        process.exit(1);
+      }
+      saveConfig(url, token);
+      process.stdout.write(`logged in to ${url} (credentials: ${CONFIG_FILE})\n`);
+    } else if (sub === "status") {
+      const { url, token } = loadConfig();
+      if (!token) {
+        process.stdout.write("not logged in\n");
+        process.exit(1);
+      }
+      process.stdout.write(`url:   ${url}\ntoken: ${token.slice(0, 9)}…\n`);
+    } else if (sub === "logout") {
+      fs.rmSync(CONFIG_FILE, { force: true });
+      process.stdout.write("credentials removed\n");
+    } else {
+      usage();
+    }
+    break;
+  }
+
+  case "upgrade": {
+    const r = spawnSync("npm", ["install", "-g", "draftlink@latest"], { stdio: "inherit", shell: true });
+    if (r.status !== 0) {
+      process.stderr.write("error: npm install failed — run it manually: npm install -g draftlink@latest\n");
+      process.exit(r.status ?? 1);
+    }
+    process.stdout.write("refresh the agent skill too: npx skills update draftlink -g\n");
+    break;
+  }
+
+  case "upload": {
+    const cfg = requireAuth();
+    const o = parseOpts(rest);
+    if (!o.file) usage();
+    const body = readBody(o);
+    const res = await api(cfg, "POST", `/api/drafts${qsOf({ title: o.title, project: o.project, status: o.status })}`, { body });
+    if (!res.ok) {
+      process.stderr.write(clean(await res.text()));
+      process.exit(1);
+    }
+    const { id, url } = await res.json();
+    process.stdout.write(`id:  ${clean(id)}\nurl: ${clean(url)}\n`);
+    break;
+  }
+
+  case "update": {
+    const cfg = requireAuth();
+    const id = rest.shift();
+    if (!id) usage();
+    const o = parseOpts(rest);
+    const res = await api(cfg, "PUT", `/api/drafts/${id}${qsOf({ title: o.title, project: o.project, status: o.status, public: o.visibility })}`, { body: readBody(o) });
+    process.stdout.write(`${clean(await res.text())}\n`);
+    break;
+  }
+
+  case "read": {
+    const target = rest[0];
+    if (!target) usage();
+    const cfg = loadConfig();
+    if (cfg.token) {
+      const id = target.startsWith("http") ? new URL(target).pathname.split("/").pop() : target;
+      const res = await api(cfg, "GET", `/api/drafts/${id}/raw`);
+      if (!res.ok) {
+        process.stderr.write(`error: HTTP ${res.status} — if this is 404, the draft is private and not shared with you\n`);
+        process.exit(1);
+      }
+      // Draft bodies are HTML: keep whitespace intact, strip only terminal escape sequences.
+      process.stdout.write((await res.text()).replaceAll("\x1b", ""));
+    } else if (target.startsWith("http")) {
+      let u;
+      try {
+        u = new URL(target);
+      } catch {
+        process.stderr.write(`error: not a valid URL: ${clean(target)}\n`);
+        process.exit(1);
+      }
+      // Without a token this branch has no auth to leak — but it must not become
+      // a generic fetch tool for agents (SSRF/internal endpoints via prompt injection).
+      if (u.protocol !== "https:" || !u.pathname.startsWith("/d/")) {
+        process.stderr.write("error: unauthenticated reads are limited to public draft links (https://…/d/<id>)\n");
+        process.exit(1);
+      }
+      const res = await fetch(u, { signal: AbortSignal.timeout(15_000), redirect: "error" });
+      if (!res.ok) {
+        process.stderr.write(`error: HTTP ${res.status}\n`);
+        process.exit(1);
+      }
+      process.stdout.write((await res.text()).replaceAll("\x1b", ""));
+    } else {
+      process.stderr.write("error: not logged in — 'draftlink read <id>' needs a login unless you pass a public link\n");
+      process.exit(1);
+    }
+    break;
+  }
+
+  case "list": {
+    const cfg = requireAuth();
+    const query = rest[0] ?? "";
+    const res = await api(cfg, "GET", `/api/drafts${qsOf({ q: query })}`);
+    const d = await res.json();
+    const marks = { active: "[        ]", done: "[   ok   ]", archived: "[archived]" };
+    for (const section of ["mine", "shared"]) {
+      for (const r of d[section] ?? []) {
+        const owner = section === "shared" && r.owner_login ? ` by @${clean(r.owner_login)}` : "";
+        process.stdout.write(`${marks[r.status] ?? "[?????]"} ${r.id}  ${clean(r.project).padEnd(12)} ${clean(r.title)}${owner}\n`);
+      }
+    }
+    break;
+  }
+
+  case "delete": {
+    const cfg = requireAuth();
+    const id = rest[0];
+    if (!id) usage();
+    await api(cfg, "DELETE", `/api/drafts/${id}`);
+    process.stdout.write(`deleted ${id}\n`);
+    break;
+  }
+
+  default:
+    usage();
+}

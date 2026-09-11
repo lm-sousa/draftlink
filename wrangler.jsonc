@@ -1,0 +1,15 @@
+{
+  "name": "draftlink",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "assets": {
+    "directory": "assets"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "draftlink",
+      "migrations_dir": "migrations"
+    }
+  ]
+}
