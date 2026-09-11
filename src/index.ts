@@ -238,7 +238,7 @@ export default {
         });
       }
 
-      return html(draftShellPage({ access, versions, versionId }), 200, { "X-Robots-Tag": "noindex" });
+      return html(draftShellPage({ access, versions, versionId, base: origin }), 200, { "X-Robots-Tag": "noindex" });
     }
 
     if (path === "/login" && req.method === "GET") {

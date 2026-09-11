@@ -106,12 +106,17 @@ function themeButton(): string {
   return `<button id="themeToggle" onclick="dlToggleTheme()" aria-label="Toggle dark mode" class="rounded-md border border-zinc-300 dark:border-zinc-600 px-2 py-1 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800">◐</button>`;
 }
 
-export function layout(opts: { title: string; body: string; user?: { login: string; admin?: boolean; pending?: number } | null; base: string; bare?: boolean }): string {
+export function layout(opts: { title: string; body: string; user?: { login: string; admin?: boolean; pending?: number } | null; base: string; bare?: boolean; description?: string; ogUrl?: string }): string {
   const head = `<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(opts.title)}</title>
 <link rel="icon" type="image/png" href="/favicon.png">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+${opts.description ? `<meta property="og:title" content="${esc(opts.title)}">
+<meta property="og:description" content="${esc(opts.description)}">
+<meta property="og:image" content="${esc(opts.base)}/banner.png">
+<meta property="og:url" content="${esc(opts.ogUrl ?? opts.base)}">
+<meta name="twitter:card" content="summary_large_image">` : ""}
 <script src="https://cdn.tailwindcss.com"></script>
 <script>tailwind.config = { darkMode: 'class' }</script>
 ${THEME_SCRIPT}
@@ -171,6 +176,7 @@ export function loginPage(base: string, opts: { configured: boolean; error?: str
   return layout({
     base,
     title: "draftlink — sign in",
+    description: "Publish HTML drafts from coding agents; searchable, shareable, status-tracked.",
     body: `
 <div class="max-w-sm mx-auto mt-24 text-center">
   <img src="/banner.png" alt="DraftLink — from idea to impact" class="mb-6 w-full rounded-xl shadow-md">
@@ -508,7 +514,7 @@ const SHELL_SCRIPT = `<script>
 })();
 </script>`;
 
-export function draftShellPage(opts: ShellOptions): string {
+export function draftShellPage(opts: ShellOptions & { base: string }): string {
   const d = opts.access.draft;
   const embedUrl = `/d/${esc(d.id)}?embed=1${opts.versionId ? `&v=${opts.versionId}` : ""}`;
   const body = `
@@ -516,7 +522,7 @@ ${draftShellHeader(opts)}
 ${draftShellBanner(opts)}
 <iframe id="dl-frame" src="${embedUrl}" sandbox="allow-scripts allow-popups" title="${esc(d.title)}" class="block w-full border-0" style="height:100vh"></iframe>
 ${SHELL_SCRIPT}`;
-  return layout({ base: "", title: d.title, bare: true, body });
+  return layout({ base: opts.base, title: d.title, bare: true, body, ogUrl: `${opts.base}/d/${d.id}` });
 }
 
 export function editPage(base: string, user: { login: string }, d: DraftRow & { body: string }): string {
