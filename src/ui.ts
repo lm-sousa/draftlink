@@ -263,7 +263,8 @@ function dashboardFilters(opts: DashboardOptions): string {
       return `<a href="${dashboardHref(opts, { filter: f })}" data-filter="${f}" class="rounded-full px-3 py-1 text-xs ${cls}">${f}</a>`;
     })
     .join("");
-  const projectChips = ["", ...opts.projects]
+  const archivedCls = opts.filter === "archived" ? "bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900" : "border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800";
+  const archiveChip = `<a href="${dashboardHref(opts, { filter: "archived" })}" data-filter="archived" class="rounded-full px-3 py-1 text-xs ${archivedCls}">archived</a>`;  const projectChips = ["", ...opts.projects]
     .map((project) => {
       const selected = project === opts.project;
       const cls = selected
@@ -274,7 +275,7 @@ function dashboardFilters(opts: DashboardOptions): string {
     })
     .join("");
   return `<div id="filterControls" class="space-y-2" aria-label="Draft filters">
-  <div id="statusFilters" class="flex flex-wrap gap-1.5" aria-label="Filter by status">${chips}</div>
+  <div id="statusFilters" class="flex flex-wrap gap-1.5 items-center" aria-label="Filter by status">${chips}<span class="text-zinc-300 dark:text-zinc-700">|</span>${archiveChip}</div>
   <div id="projectFilters" class="flex flex-wrap gap-1.5" aria-label="Filter by project">${projectChips}</div>
 </div>`;
 }
