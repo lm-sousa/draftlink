@@ -137,6 +137,11 @@ describe("draft lifecycle", () => {
       mine: { id: string; status: string }[];
     };
     expect(list.mine.some((r) => r.id === id && r.status === "archived")).toBe(true);
+    expect(list.mine.every((r) => r.status === "archived")).toBe(true);
+    const active = await createId(t, "?title=still%20active");
+    const def = (await (await SELF.fetch("https://x.test/api/drafts", { headers: api(t) })).json()) as { mine: { id: string; status: string }[] };
+    expect(def.mine.some((r) => r.id === active)).toBe(true);
+    expect(def.mine.some((r) => r.id === id)).toBe(false);
   });
 });
 
