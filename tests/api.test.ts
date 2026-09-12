@@ -142,6 +142,11 @@ describe("draft lifecycle", () => {
     const def = (await (await SELF.fetch("https://x.test/api/drafts", { headers: api(t) })).json()) as { mine: { id: string; status: string }[] };
     expect(def.mine.some((r) => r.id === active)).toBe(true);
     expect(def.mine.some((r) => r.id === id)).toBe(false);
+    await SELF.fetch(`https://x.test/api/drafts/${active}?status=done`, { method: "PUT", headers: api(t), body: "" });
+    for (const [filter, want] of [["active", false], ["done", true]] as const) {
+      const f = (await (await SELF.fetch(`https://x.test/api/drafts?filter=${filter}`, { headers: api(t) })).json()) as { mine: { id: string }[] };
+      expect(f.mine.some((r) => r.id === active)).toBe(want);
+    }
   });
 });
 
