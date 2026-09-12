@@ -490,6 +490,7 @@ const SHELL_SCRIPT = `<script>
     if (e.source !== frame.contentWindow) return;
     if (e.data && e.data.type === "dl-size" && typeof e.data.h === "number" && e.data.h > 0) {
       frame.style.height = Math.ceil(e.data.h) + "px";
+      frame.contentWindow.postMessage({ type: "dl-theme", dark: document.documentElement.classList.contains("dark") }, "*");
     }
   });
 

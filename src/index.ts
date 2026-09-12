@@ -104,11 +104,22 @@ const THEME_JS = `(function () {
     root.classList.toggle("dark", dark);
     root.style.colorScheme = dark ? "dark" : "light";
   }
+  // Sandboxed draft iframes have an opaque origin and can't read localStorage,
+  // so the shell pushes its theme in over postMessage.
+  addEventListener("message", function (e) {
+    if (e.source !== window.parent && e.source !== (document.getElementById("dl-frame") || {}).contentWindow) return;
+    if (e.data && e.data.type === "dl-theme" && typeof e.data.dark === "boolean") {
+      root.classList.toggle("dark", e.data.dark);
+      root.style.colorScheme = e.data.dark ? "dark" : "light";
+    }
+  });
   window.dlApplyTheme = apply;
   window.dlToggleTheme = function () {
     var next = (stored() ? stored() === "dark" : prefersDark()) ? "light" : "dark";
     try { localStorage.setItem(KEY, next); } catch (e) {}
     apply();
+    var f = document.getElementById("dl-frame");
+    if (f && f.contentWindow) f.contentWindow.postMessage({ type: "dl-theme", dark: next === "dark" }, "*");
   };
   apply();
 })();`;
