@@ -1,6 +1,8 @@
 import { randomId } from "./util";
 
 export const STATUS_ORDER = ["active", "done", "archived"] as const;
+// The round toggle only cycles between these; archived is set via the archive action.
+export const TOGGLE_ORDER = ["active", "done"] as const;
 export type Status = (typeof STATUS_ORDER)[number];
 
 // Keep the last 25 versions per draft; raise if agent churn overflows this.
@@ -172,7 +174,7 @@ export async function listMine(db: D1Database, userId: number, q: string, filter
   const { results } = await db
     .prepare(
       `SELECT id, title, project, status, is_public, created_at, updated_at FROM drafts
-       WHERE owner_user_id = ?1 AND (?2 = '%%' OR title LIKE ?2 ESCAPE '\\' OR project LIKE ?2 ESCAPE '\\' OR body LIKE ?2 ESCAPE '\\') AND (?3 = 'all' OR status = ?3)
+       WHERE owner_user_id = ?1 AND (?2 = '%%' OR title LIKE ?2 ESCAPE '\\' OR project LIKE ?2 ESCAPE '\\' OR body LIKE ?2 ESCAPE '\\') AND (?3 = 'archived' OR (?3 != 'archived' AND status != 'archived'))
        AND (?4 = '' OR project = ?4)
        ORDER BY created_at DESC LIMIT 500`
     )
@@ -187,7 +189,7 @@ export async function listShared(db: D1Database, githubId: number, q: string, fi
     .prepare(
       `SELECT d.id, d.title, d.project, d.status, d.is_public, d.created_at, d.updated_at, u.login AS owner_login
        FROM drafts d JOIN draft_access a ON a.draft_id = d.id JOIN users u ON u.id = d.owner_user_id
-       WHERE a.github_id = ?1 AND (?2 = '%%' OR d.title LIKE ?2 ESCAPE '\\' OR d.project LIKE ?2 ESCAPE '\\' OR d.body LIKE ?2 ESCAPE '\\') AND (?3 = 'all' OR d.status = ?3)
+       WHERE a.github_id = ?1 AND (?2 = '%%' OR d.title LIKE ?2 ESCAPE '\\' OR d.project LIKE ?2 ESCAPE '\\' OR d.body LIKE ?2 ESCAPE '\\') AND (?3 = 'archived' OR (?3 != 'archived' AND d.status != 'archived'))
        AND (?4 = '' OR d.project = ?4)
        ORDER BY d.created_at DESC LIMIT 500`
     )

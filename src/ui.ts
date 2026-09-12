@@ -1,5 +1,5 @@
 import { esc, dateLabel } from "./util";
-import { STATUS_ORDER, type Access, type DraftRow, type Status, type VersionRow } from "./drafts";
+import { TOGGLE_ORDER, type Access, type DraftRow, type VersionRow } from "./drafts";
 
 export interface DashboardOptions {
   q: string;
@@ -190,8 +190,7 @@ export function loginPage(base: string, opts: { configured: boolean; error?: str
 
 function draftCard(d: DraftRow, isOwner: boolean): string {
   const st = STATUS_STYLE[d.status] ?? STATUS_STYLE.active;
-  const nextIdx = (STATUS_ORDER.indexOf(d.status as Status) + 1) % STATUS_ORDER.length;
-  const next = STATUS_ORDER[nextIdx];
+  const next = TOGGLE_ORDER[d.status === "done" ? 0 : 1];
   return `
 <li class="flex items-start gap-3 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-3">
   <form method="post" action="/drafts/${esc(d.id)}/status" title="Mark as ${next}">
@@ -208,6 +207,11 @@ function draftCard(d: DraftRow, isOwner: boolean): string {
       ${!isOwner && d.owner_login ? `<span>shared by @${esc(d.owner_login)}</span>` : ""}
       <a href="/drafts/${esc(d.id)}/edit" class="hover:underline">edit</a>
       ${isOwner ? `<a href="/drafts/${esc(d.id)}/share" class="hover:underline">share</a>` : ""}
+      ${
+        isOwner
+          ? `<form method="post" action="/drafts/${esc(d.id)}/status" class="inline" onsubmit="return confirm('Archive this draft? It will be hidden from the dashboard.')"><input type="hidden" name="status" value="archived"><button class="hover:underline">archive</button></form>`
+          : ""
+      }
       ${
         isOwner
           ? `<form method="post" action="/drafts/${esc(d.id)}/delete" class="inline" onsubmit="return confirm('Delete this draft?')"><button class="hover:underline text-red-600 dark:text-red-400">delete</button></form>`
@@ -249,7 +253,7 @@ function dashboardHref(opts: DashboardOptions, overrides: { filter?: string; pro
 }
 
 function dashboardFilters(opts: DashboardOptions): string {
-  const filters = ["all", "active", "done", "archived"];
+  const filters = ["all", "active", "done"];
   const chips = filters
     .map((f) => {
       const cls =
@@ -427,8 +431,7 @@ export interface ShellOptions {
 export function draftShellHeader(opts: ShellOptions): string {
   const d = opts.access.draft;
   const st = STATUS_STYLE[d.status] ?? STATUS_STYLE.active;
-  const nextIdx = (STATUS_ORDER.indexOf(d.status as Status) + 1) % STATUS_ORDER.length;
-  const next = STATUS_ORDER[nextIdx];
+  const next = TOGGLE_ORDER[d.status === "done" ? 0 : 1];
   const live = opts.versionId === null;
   const viewedIdx = live ? -1 : opts.versions.findIndex((v) => v.id === opts.versionId);
   const chip = opts.access.canEdit

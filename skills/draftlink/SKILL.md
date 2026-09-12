@@ -45,7 +45,7 @@ Omitting `--file` keeps the current HTML and only changes the metadata.
 
 `--public` and `--private` change who can read the draft. NEVER pass `--public` unless the user explicitly asked to publish that draft — it exposes the content to the entire internet.
 
-Statuses are `active`, `done`, `archived`. Set `done` when the user says the work shipped; `archived` when they say it no longer needs attention. Never delete unless asked explicitly (owner-only anyway).
+Statuses are `active`, `done`, `archived`. Set `done` when the user says the work shipped; `archived` only when they explicitly ask to archive/hide a draft (it disappears from the dashboard's default view). Never delete unless asked explicitly (owner-only anyway).
 
 Search the user's drafts when they ask where something went:
 

@@ -369,7 +369,7 @@ switch (cmd) {
     const query = rest[0] ?? "";
     const res = await api(cfg, "GET", `/api/drafts${qsOf({ q: query })}`);
     const d = await res.json();
-    const marks = { active: "[        ]", done: "[   ok   ]", archived: "[archived]" };
+    const marks = { active: "[        ]", done: "[   ok   ]", archived: "[hidden  ]" };
     for (const section of ["mine", "shared"]) {
       for (const r of d[section] ?? []) {
         const owner = section === "shared" && r.owner_login ? ` by @${clean(r.owner_login)}` : "";
