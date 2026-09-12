@@ -431,3 +431,70 @@ describe("security hardening", () => {
     expect(banned.status).toBe(303);
   });
 });
+
+describe("invite links", () => {
+  it("admin can create, list, and revoke invite links; non-admins get 404", async () => {
+    const admin = await makeUser("inv-admin");
+    await env.DB.prepare("UPDATE users SET is_admin = 1 WHERE id = ?").bind(admin.id).run();
+    const cookie = { Cookie: await sessionCookie(admin.id), "Content-Type": "application/x-www-form-urlencoded" };
+
+    const created = await SELF.fetch("https://x.test/admin/invite", { method: "POST", redirect: "manual", headers: cookie });
+    expect(created.status).toBe(303);
+    const location = created.headers.get("Location") ?? "";
+    expect(location).toMatch(/^\/admin\?invite=[0-9a-f]{32}$/);
+    const token = new URL(`https://x.test${location}`).searchParams.get("invite")!;
+
+    const banner = await (await SELF.fetch(`https://x.test${location}`, { headers: { Cookie: cookie.Cookie } })).text();
+    expect(banner).toContain(`auth/github?invite=${token}`);
+    const page = await (await SELF.fetch("https://x.test/admin", { headers: { Cookie: cookie.Cookie } })).text();
+    expect(page).not.toContain(token);
+    expect(page).toContain("active");
+
+    // the invite param rides into the signed OAuth state cookie
+    const oauth = await SELF.fetch(`https://x.test/auth/github?invite=${token}`, { redirect: "manual" });
+    expect(oauth.status).toBe(303);
+    expect(oauth.headers.get("Location") ?? "").toContain("github.com/login/oauth/authorize");
+    const setCookie = oauth.headers.get("Set-Cookie") ?? "";
+    expect(setCookie).toContain("dl_state=");
+
+    const revoked = await SELF.fetch("https://x.test/admin/invite/revoke", {
+      method: "POST", redirect: "manual", headers: cookie,
+      body: "id=1",
+    });
+    expect(revoked.status).toBe(303);
+    const left = await env.DB.prepare("SELECT COUNT(*) AS n FROM invite_links").first<{ n: number }>();
+    expect(left!.n).toBe(0);
+
+    const pleb = await makeUser("inv-pleb");
+    const denied = await SELF.fetch("https://x.test/admin/invite", {
+      method: "POST", redirect: "manual",
+      headers: { Cookie: await sessionCookie(pleb.id) },
+    });
+    expect(denied.status).toBe(404);
+  });
+
+  it("claim is one-time and respects expiry", async () => {
+    const admin = await makeUser("inv-admin2");
+    await env.DB.prepare("UPDATE users SET is_admin = 1 WHERE id = ?").bind(admin.id).run();
+    const token = randomHex(16);
+    await env.DB.prepare("INSERT INTO invite_links (token_hash, created_by, created_at, expires_at) VALUES (?, ?, ?, ?)")
+      .bind(await sha256Hex(token), admin.id, Date.now(), Date.now() + 7 * 24 * 3600_000)
+      .run();
+
+    const claim = async (t: string) =>
+      (
+        await env.DB.prepare("UPDATE invite_links SET used_at = ?, used_by = 1 WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?")
+          .bind(Date.now(), await sha256Hex(t), Date.now())
+          .run()
+      ).meta.changes ?? 0;
+
+    expect(await claim(token)).toBe(1);
+    expect(await claim(token)).toBe(0);
+
+    const expired = randomHex(16);
+    await env.DB.prepare("INSERT INTO invite_links (token_hash, created_by, created_at, expires_at) VALUES (?, ?, ?, ?)")
+      .bind(await sha256Hex(expired), admin.id, Date.now(), Date.now() - 1000)
+      .run();
+    expect(await claim(expired)).toBe(0);
+  });
+});

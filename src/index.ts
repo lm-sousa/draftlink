@@ -67,6 +67,7 @@ interface UserRow {
 const SESSION_COOKIE = "dl_session";
 const STATE_COOKIE = "dl_state";
 const SESSION_TTL_S = 30 * 24 * 3600;
+const INVITE_TTL_S = 7 * 24 * 3600;
 const MAX_BODY = 4 * 1024 * 1024;
 
 function json(data: unknown, status = 200): Response {
@@ -250,7 +251,8 @@ export default {
     if (path === "/auth/github" && req.method === "GET") {
       if (!env.GITHUB_CLIENT_ID || !env.SESSION_SECRET) return redirect("/login?error=Not+configured");
       const state = randomHex(16);
-      const signed = await signPayload(env.SESSION_SECRET, { n: state, exp: Date.now() + 600_000 });
+      const invite = (url.searchParams.get("invite") ?? "").slice(0, 64);
+      const signed = await signPayload(env.SESSION_SECRET, { n: state, inv: invite || undefined, exp: Date.now() + 600_000 });
       const redirectUri = `${origin}/auth/callback`;
       return redirect(
         `https://github.com/login/oauth/authorize?client_id=${encodeURIComponent(env.GITHUB_CLIENT_ID)}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=read:user&state=${state}`,
@@ -283,11 +285,27 @@ export default {
         .first<{ id: number; status: string }>();
       if (!inserted) return redirect("/login?error=Could+not+create+account");
       let status = inserted.status;
-      if (status === "pending") {
-        // Bootstrap: an instance with no admin yet promotes its first sign-in.
-        // Banned users are never promoted.
+      // One-time invite links bypass the pending queue: whoever signed in with
+      // a valid, unused token is approved and the token is burned.
+      const inviteToken = typeof stored.inv === "string" ? stored.inv : undefined;
+      if (status === "pending" && inviteToken) {
+        const claimed =
+          (
+            await env.DB.prepare("UPDATE invite_links SET used_at = ?, used_by = ? WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?")
+              .bind(Date.now(), inserted.id, await sha256Hex(inviteToken), Date.now())
+              .run()
+          ).meta.changes === 1;
+        if (claimed) {
+          await env.DB.prepare("UPDATE users SET status = 'approved' WHERE id = ?").bind(inserted.id).run();
+          status = "approved";
+        }
+      }
+      // Bootstrap: an instance with no admin yet promotes its first sign-in.
+      // Banned users are never promoted. Runs even for invited users, or a
+      // fresh instance could end up with an approved user but no admin.
+      if (status !== "banned") {
         const r = await env.DB.prepare(
-          "UPDATE users SET status = 'approved', is_admin = 1 WHERE id = ? AND NOT EXISTS (SELECT 1 FROM users WHERE is_admin = 1)"
+          "UPDATE users SET status = 'approved', is_admin = 1 WHERE id = ? AND status = 'pending' AND NOT EXISTS (SELECT 1 FROM users WHERE is_admin = 1)"
         )
           .bind(inserted.id)
           .run();
@@ -519,11 +537,23 @@ export default {
       return html(errorPage(origin, 404, "Unknown action.", user), 404);
     }
 
-    if (path.startsWith("/admin") && (path === "/admin" || path === "/admin/approve" || path === "/admin/ban" || path === "/admin/make-admin" || path === "/admin/remove-admin")) {
+    if (path.startsWith("/admin") && (path === "/admin" || path === "/admin/approve" || path === "/admin/ban" || path === "/admin/make-admin" || path === "/admin/remove-admin" || path === "/admin/invite" || path === "/admin/invite/revoke")) {
       if (!user || user.is_admin !== 1) return html(errorPage(origin, 404, "Nothing here.", user), 404);
       if (req.method === "POST") {
         const fd = await req.formData();
         const id = Number(fd.get("id"));
+        if (path === "/admin/invite") {
+          const token = randomHex(16);
+          const expiresAt = Date.now() + INVITE_TTL_S * 1000;
+          await env.DB.prepare("INSERT INTO invite_links (token_hash, created_by, created_at, expires_at) VALUES (?, ?, ?, ?)")
+            .bind(await sha256Hex(token), user.id, Date.now(), expiresAt)
+            .run();
+          return redirect(`/admin?invite=${encodeURIComponent(token)}`);
+        }
+        if (path === "/admin/invite/revoke") {
+          if (Number.isInteger(id)) await env.DB.prepare("DELETE FROM invite_links WHERE rowid = ? AND used_at IS NULL").bind(id).run();
+          return redirect("/admin");
+        }
         if (Number.isInteger(id)) {
           if (path === "/admin/approve" || path === "/admin/ban") {
             const status = path === "/admin/approve" ? "approved" : "banned";
@@ -538,7 +568,9 @@ export default {
         return redirect("/admin");
       }
       const { results } = await env.DB.prepare("SELECT id, login, status, is_admin, created_at FROM users ORDER BY created_at DESC").all<{ id: number; login: string; status: string; is_admin: number; created_at: number }>();
-      return html(adminPage(origin, user, results ?? []));
+      const invites = (await env.DB.prepare("SELECT rowid AS id, created_at, expires_at, used_at FROM invite_links ORDER BY created_at DESC").all<{ id: number; created_at: number; expires_at: number; used_at: number | null }>()).results ?? [];
+      const inviteParam = url.searchParams.get("invite") ?? "";
+      return html(adminPage(origin, user, results ?? [], invites, /^[0-9a-f]{32}$/.test(inviteParam) ? inviteParam : undefined));
     }
 
     if (path === "/install" && req.method === "GET") return html(installPage(origin, user));

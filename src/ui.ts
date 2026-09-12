@@ -664,7 +664,13 @@ ${COPY_SCRIPT}`;
   return layout({ base, title: "Install", user, body });
 }
 
-export function adminPage(base: string, user: { login: string }, users: { id: number; login: string; status: string; is_admin: number; created_at: number }[]): string {
+export function adminPage(
+  base: string,
+  user: { login: string },
+  users: { id: number; login: string; status: string; is_admin: number; created_at: number }[],
+  invites: { id: number; created_at: number; expires_at: number; used_at: number | null }[] = [],
+  newInvite?: string
+): string {
   const STATUS_STYLES: Record<string, string> = {
     approved: "text-emerald-600 dark:text-emerald-400",
     pending: "text-amber-600 dark:text-amber-400",
@@ -685,10 +691,37 @@ export function adminPage(base: string, user: { login: string }, users: { id: nu
   </div>
 </li>`)
     .join("");
+  const now = Date.now();
+  const inviteBanner = newInvite
+    ? `<div class="mb-6 rounded-lg border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950 p-4">
+        <p class="text-sm font-medium mb-2">New invite link (copy now, shown once):</p>
+        <code class="block break-all rounded bg-white dark:bg-zinc-900 px-3 py-2 text-sm select-all">${esc(base)}/auth/github?invite=${esc(newInvite)}</code>
+      </div>`
+    : "";
+  const inviteRows = invites.length
+    ? invites
+        .map((i) => {
+          const used = i.used_at !== null;
+          const expired = !used && i.expires_at <= now;
+          const state = used ? `<span class="text-xs text-zinc-500">used ${localTime(i.used_at!)}</span>` : expired ? `<span class="text-xs text-red-600 dark:text-red-400">expired</span>` : `<span class="text-xs text-emerald-600 dark:text-emerald-400">active</span>`;
+          const revoke = !used && !expired ? `<form method="post" action="/admin/invite/revoke"><input type="hidden" name="id" value="${i.id}"><button class="text-sm text-red-600 dark:text-red-400 hover:underline">revoke</button></form>` : "";
+          return `<li class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 py-2">
+  <span class="text-xs text-zinc-500">created ${localTime(i.created_at)} · expires ${localTime(i.expires_at)}</span>
+  <div class="flex items-center gap-3">${state}${revoke}</div>
+</li>`;
+        })
+        .join("")
+    : `<li class="text-sm text-zinc-500">No invite links yet.</li>`;
+  const inviteSection = `
+<h2 class="text-lg font-semibold mt-10 mb-1">Invite links</h2>
+<p class="text-sm text-zinc-500 mb-4">Anyone signing in through an invite link is approved automatically — no pending review. Links are single-use and expire after 7 days.</p>
+${inviteBanner}
+<form method="post" action="/admin/invite" class="mb-6"><button class="rounded-md bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 px-4 py-2 text-sm font-medium hover:opacity-90">Create invite link</button></form>
+<ul class="space-y-2 max-w-md">${inviteRows}</ul>`;
   const body = `
 <h1 class="text-xl font-bold mb-1">Admin — accounts</h1>
 <p class="text-sm text-zinc-500 mb-6">New GitHub signups start as <span class="text-amber-600 dark:text-amber-400">pending</span> and can't sign in until you approve them. Banning blocks dashboard and API access immediately. Removing the last remaining admin is blocked to prevent lockout.</p>
-<ul class="space-y-2">${rows}</ul>`;
+<ul class="space-y-2">${rows}</ul>${inviteSection}`;
   return layout({ base, title: "Admin", user, body });
 }
 

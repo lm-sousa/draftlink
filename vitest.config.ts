@@ -12,6 +12,7 @@ export default defineConfig({
           SESSION_SECRET: "test-session-secret",
           DEV_MODE: "1",
           DEV_LOGIN_SECRET: "test-dev-secret",
+          GITHUB_CLIENT_ID: "test-client-id",
         },
       },
     }),
